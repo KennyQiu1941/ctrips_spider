@@ -163,15 +163,9 @@ class CtripPTSpider:
                     acityzimu = tmp[3]
                     acitynum = tmp[2]
                     if not rdb.sismember(self.rdb_unreq_name, json.dumps('{}->{}'.format(dcityname, acityname))):
-                        while True:
-                            try:
-                                rdb.lpush(self.rdb_post_data_name, json.dumps(
-                                    [dcityzimu, acityzimu, dcityname, acityname, date, dcitynum, acitynum]))
-                            except Exception as e:
-                                wdblogger.error('写入post参数是redis数据库发生错误{}重写连接'.format(e))
-                                rdb = self.con_redis()
-                            else:
-                                break
+                        rdb.lpush(self.rdb_post_data_name, json.dumps(
+                            [dcityzimu, acityzimu, dcityname, acityname, date, dcitynum, acitynum]))
+
 
     def write_parameter(self, cityscode, rdb):
         for date in self.gendate():
@@ -268,12 +262,12 @@ class CtripPTSpider:
                     break
                 else:
                     s = '价格更新失败，失败代码：【删除：{}更新{}】，db数据：{} 需要更新数据：{}new={},pricelist={} 航班={}'.format(pullStatus,
-                                                                                                     pushStatus,
-                                                                                                     i,
-                                                                                                     tmpdict,
-                                                                                                     new,
-                                                                                                     pricelist,
-                                                                                                     tmpmongodata)
+                                                                                                    pushStatus,
+                                                                                                    i,
+                                                                                                    tmpdict,
+                                                                                                    new,
+                                                                                                    pricelist,
+                                                                                                    tmpmongodata)
                     wdblogger.error(s)
                     mylogging.sender(s)
                     rdb.incr(self.error_count)
@@ -294,8 +288,8 @@ class CtripPTSpider:
                 newinfo = tmpdata[:-1]
                 rawinfo = i['info'][:-1]
                 if newinfo == rawinfo:
-                    newprice = tmpdata[-1]['price'][0]
-                    rawprice = idata[-1]['price'][0]
+                    newprice = tmpdata[-1]['price'][-2]
+                    rawprice = idata[-1]['price'][-2]
                     sameDataSign = 1
                     if newprice != rawprice:
                         self.updateflights(coll, dcityname, tmpmongodata, tmpdict, i, newprice, routetype, rdb)
@@ -351,17 +345,7 @@ class CtripPTSpider:
                                         tmpdict = self.geteachflightinfo(eachdata, routeinfo, routetype, rdb)
                                         if not tmpdict:
                                             continue
-                                        while True:
-                                            try:
-                                                mongodocuments = coll.find_one(mongodata)
-                                            except Exception as e:
-                                                wdblogger.error('疑似数据库连接错误原因代码：{}'.format(e))
-                                                mylogging.sender('疑似数据库连接错误原因代码：{}'.format(e))
-                                                rdb.incr(self.error_count)
-                                                db = self.con_mongo()
-                                                coll = db[dcityname]
-                                            else:
-                                                break
+                                        mongodocuments = coll.find_one(mongodata)
                                         if mongodocuments:
                                             self.check_price(coll, dcityname, tmpdict, mongodocuments, tmpmongodata,
                                                              routetype,
@@ -375,21 +359,11 @@ class CtripPTSpider:
                                             rdb.incr(self.error_count)
                                             raise Exception
                                 if infolist:
-                                    while True:
-                                        mongodata['infolist'] = infolist
-                                        try:
-                                            coll.insert(mongodata)
-                                        except Exception as a:
-                                            wdblogger.warning('mongo数据库发生错误查询了解{}'.format(a))
-                                            mylogging.sender('mongo数据库发生错误重新连接{}'.format(a))
-                                            rdb.incr(self.error_count)
-                                            db = self.con_mongo()
-                                            coll = db[dcityname]
-                                        else:
-                                            stlogger.info('加入新{}'.format(tmpmongodata))
-                                            break
+                                    mongodata['infolist'] = infolist
+                                    coll.insert(mongodata)
                             else:
-                                stlogger.info('{}状态码返回显示有航班但是无数据'.format(mongodata))
+                                stlogger.info('{}状态码返回显示有航班但是无数据加入redis下次不请求'.format(tmpmongodata))
+                                rdb.sadd(self.rdb_unreq_name, json.dumps('{}'.format(tmpmongodata)))
                                 continue
                         else:
                             fromto = '{}->{}'.format(dcityname, acityname)
