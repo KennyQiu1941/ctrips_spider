@@ -132,14 +132,14 @@ class CtripPTSpider:
             yield time.strftime('%Y-%m-%d', time.localtime(nowtime))
 
     # 检查线程数发现以外错误并返回
-    def check_threadnum(self,thread_num,rdb):
+    def check_threadnum(self, thread_num, rdb):
         stlogger.info('检查以外退出程序启动')
-        raw_threadList= threading.enumerate()
+        raw_threadList = threading.enumerate()
         while True:
             now_threadList = threading.enumerate()
             now_tlnum = len(now_threadList)
             if now_tlnum < thread_num:
-                s = '发现以外错误{}个原进程列表:{}现在进程列表：{}'.format(thread_num-now_tlnum,raw_threadList,now_threadList)
+                s = '发现以外错误{}个原进程列表:{}现在进程列表：{}'.format(thread_num - now_tlnum, raw_threadList, now_threadList)
                 wdblogger.error(s)
                 mylogging.sender(s)
                 rdb.incr(self.error_count)
@@ -165,7 +165,6 @@ class CtripPTSpider:
                     if not rdb.sismember(self.rdb_unreq_name, json.dumps('{}->{}'.format(dcityname, acityname))):
                         rdb.lpush(self.rdb_post_data_name, json.dumps(
                             [dcityzimu, acityzimu, dcityname, acityname, date, dcitynum, acitynum]))
-
 
     def write_parameter(self, cityscode, rdb):
         for date in self.gendate():
@@ -197,7 +196,8 @@ class CtripPTSpider:
     # 从返回处理过的json数据中获取出发，目的地的机场和时间
     def geteachflightinfo(self, eachdata, routeinfo, routetype, rdb):
         tmplist = list()
-        tmpdict = {'routetype': routetype}
+        flightId = str(time.time()).replace('.', '0')
+        tmpdict = {'routetype': routetype, 'flightId': flightId}
         for eachinfo in routeinfo:
             hangbaninfo = eachinfo['flight']
             flightNumber = hangbaninfo['flightNumber']  # 航班号
@@ -221,9 +221,8 @@ class CtripPTSpider:
                 except Exception:
                     stlogger.info('无效数据')
                 else:
-                    tmplist.append({'price': [price, time.time()]})
                     tmpdict['info'] = tmplist
-                    return tmpdict
+                    return tmpdict, '{}price'.format(flightId), [price, time.time()]
         if routetype == 'Transit':
             try:
                 price = eachdata['transitPrice']
@@ -231,84 +230,41 @@ class CtripPTSpider:
                 wdblogger.error('解析价格是发生错误 {} 疑似未知结构数据{}'.format(e, eachdata))
                 rdb.incr(self.error_count)
             else:
-                tmplist.append({'price': [price, time.time()]})
                 tmpdict['info'] = tmplist
-                return tmpdict
+                return tmpdict, '{}price'.format(flightId), [price, time.time()]
 
     # 更新mongodb价格数据
-    def updateflights(self, coll, dcityname, tmpmongodata, tmpdict, i, newprice, routetype, rdb):
-        newinfo = tmpdict['info'][:-1]
-        pricelist = copy.copy(i['info'][-1]['price'])
-        pricelist.append(newprice)
-        pricelist.append(time.time())
-        pricedict = {'price': pricelist}
-        newinfo.append(pricedict)
-        new = {'routetype': routetype, 'info': newinfo}
-        while True:
-            try:
-                b = coll.update_one(tmpmongodata, {'$push': {'infolist': new}})
-                a = coll.update_one(tmpmongodata, {'$pull': {'infolist': i}})
-            except Exception as e:
-                wdblogger.error('更价格数据是mongodb出现错误重写连接')
-                mylogging.sender('更价格数据是mongodb出现错误重写连接')
-                rdb.incr(self.error_count)
-                db = self.con_mongo()
-                coll = db[dcityname]
-            else:
-                pushStatus = b.modified_count
-                pullStatus = a.modified_count
-                if pushStatus and pullStatus:
-                    stlogger.info('{} 价格更新{}'.format(tmpmongodata, pricelist))
-                    break
-                else:
-                    s = '价格更新失败，失败代码：【删除：{}更新{}】，db数据：{} 需要更新数据：{}new={},pricelist={} 航班={}'.format(pullStatus,
-                                                                                                    pushStatus,
-                                                                                                    i,
-                                                                                                    tmpdict,
-                                                                                                    new,
-                                                                                                    pricelist,
-                                                                                                    tmpmongodata)
-                    wdblogger.error(s)
-                    mylogging.sender(s)
-                    rdb.incr(self.error_count)
-                    raise Exception
+    def updatePrice(self, coll, price, mongodocuments,tmpmongodata,rawpriceId):
+        mongodb_reop = coll.update_one(tmpmongodata, {'$push':{rawpriceId:{'$each':price}}})
+        if mongodb_reop.modified_count:
+            stlogger.info('{} 价格更新'.format(tmpmongodata))
+        else:
+            wdblogger.info('{}价格更新失败{}'.format(tmpmongodata,mongodocuments))
 
-    # 检查新获取的数据是否在数据库内不在就添加如数据库，数据库有就核对价格价格变化传给updateflights函数更新数据
-    def check_price(self, coll, dcityname, tmpdict, mongodocuments, tmpmongodata, routetype, rdb):
-        mongodocuments = mongodocuments['infolist']
-        if not tmpdict:
-            wdblogger.error('fromto={} tmpdict={} mongodb={} '.format(tmpmongodata,tmpdict,mongodocuments))
+    # 检查新获取的数据是否在数据库内不在就添加如数据库，数据库有就核对价格价格变化传给updatePrice函数更新数据
+    def check_price(self, coll, tmpdict, mongodocuments, tmpmongodata, routetype, priceKey,price):
+        flightList = mongodocuments['infolist']
         tmpdata = tmpdict['info']
-        sameDataSign = 0  # 用来标记需要验证的航班是否是新的航班
-        for i in mongodocuments:
-            if not i:
-                wdblogger.error('fromto={} tmpdict={} mongodb={} '.format(tmpmongodata,tmpdict,mongodocuments))
-            idata = i['info']
+        sameDataSign = False  # 用来标记需要验证的航班是否是新的航班
+        for i in flightList:
             if i['routetype'] == routetype:
-                newinfo = tmpdata[:-1]
-                rawinfo = i['info'][:-1]
+                newinfo = tmpdata
+                rawinfo = i['info']
                 if newinfo == rawinfo:
-                    newprice = tmpdata[-1]['price'][-2]
-                    rawprice = idata[-1]['price'][-2]
-                    sameDataSign = 1
+                    newprice = price[0]
+                    rawpriceId = '{}price'.format(i['flightId'])
+                    rawprice = mongodocuments[rawpriceId][-2]
+                    sameDataSign = True
                     if newprice != rawprice:
-                        self.updateflights(coll, dcityname, tmpmongodata, tmpdict, i, newprice, routetype, rdb)
+                        self.updatePrice(coll, price, mongodocuments,tmpmongodata,rawpriceId)
                     else:
-                        stlogger.info('{} 价格不变'.format(tmpmongodata))
+                        stlogger.info('{} {}价格不变'.format(tmpmongodata,rawpriceId))
         if not sameDataSign:  # 插入新的航班数据
-            while True:
-                try:
-                    a = coll.update_one(tmpmongodata, {'$push': {'infolist': tmpdict}})
-                except Exception as e:
-                    wdblogger.error('加入新航班数据时mongodb出现错误重写连接')
-                    mylogging.sender('加入新航班数据时mongodb出现错误重写连接')
-                    rdb.incr(self.error_count)
-                    db = self.con_mongo()
-                    coll = db[dcityname]
-                else:
-                    if a.modified_count:
-                        stlogger.info('{}发现醒的航班并插入数据库'.format(tmpmongodata))
-                        break
+            infomongodb_reop = coll.update_one(tmpmongodata, {'$push': {'infolist': tmpdict,priceKey:{'$each':price}}})
+            if infomongodb_reop.modified_count:
+                stlogger.info('{}发现新的航班并插入数据库'.format(tmpmongodata))
+            else:
+                wdblogger.info('{}价格更新失败{}'.format(tmpmongodata,mongodocuments))
 
     # 从redis数控获取需要爬的fromtodate并继续请求和筛选写入数据库
     def write_database(self, rdb, db):
@@ -327,6 +283,9 @@ class CtripPTSpider:
                                          "acityid": acitynum}]}
                     coll = db[dcityname]
                     jsondata = self.req(postjsondata, date, dcityname, acityname, rdb)
+                    fromto = '{}->{}'.format(dcityname, acityname)
+                    mongodata = {'from-to': '{}->{}{}'.format(dcityname, acityname, date)}
+                    tmpmongodata = copy.deepcopy(mongodata)
                     if not jsondata:
                         rdb.lpush(self.rdb_post_data_name, postdata)
                         continue
@@ -334,24 +293,25 @@ class CtripPTSpider:
                         routeStatus = jsondata['error']
                         if not routeStatus or (routeStatus['code'] == '102'):
                             alldata = jsondata['routeList']
-                            mongodata = {'from-to': '{}->{}{}'.format(dcityname, acityname, date)}
-                            tmpmongodata = copy.copy(mongodata)
+                            mongodocuments = coll.find_one(tmpmongodata)
                             infolist = list()
                             if alldata:
                                 for eachdata in alldata:
                                     routetype = eachdata['routeType']
                                     if routetype == 'Transit' or routetype == 'Flight':
                                         routeinfo = eachdata['legs']
-                                        tmpdict = self.geteachflightinfo(eachdata, routeinfo, routetype, rdb)
-                                        if not tmpdict:
+                                        try:
+                                            tmpdict, priceKey, price = self.geteachflightinfo(eachdata, routeinfo,
+                                                                                              routetype, rdb)
+                                        except Exception as e:
+                                            wdblogger.error('geteachflightinfo函数返回发生错{}'.format(e))
                                             continue
-                                        mongodocuments = coll.find_one(mongodata)
                                         if mongodocuments:
-                                            self.check_price(coll, dcityname, tmpdict, mongodocuments, tmpmongodata,
-                                                             routetype,
-                                                             rdb)
+                                            self.check_price(coll, tmpdict, mongodocuments, tmpmongodata,
+                                                             routetype,  priceKey, price)
                                         else:
                                             infolist.append(tmpdict)
+                                            mongodata[priceKey] = price
                                     else:
                                         if routetype != 'FlightBus' and routetype != 'FlightTrain':
                                             wdblogger.error('线路类出现未知类型：{}具体数据：{}'.format(routetype, eachdata))
@@ -361,22 +321,21 @@ class CtripPTSpider:
                                 if infolist:
                                     mongodata['infolist'] = infolist
                                     coll.insert(mongodata)
+                                    stlogger.info('加入全新{}数据'.format(tmpmongodata))
                             else:
                                 stlogger.info('{}状态码返回显示有航班但是无数据加入redis下次不请求'.format(tmpmongodata))
-                                rdb.sadd(self.rdb_unreq_name, json.dumps('{}'.format(tmpmongodata)))
+                                rdb.sadd(self.rdb_unreq_name, json.dumps('{}'.format(fromto)))
                                 continue
                         else:
-                            fromto = '{}->{}'.format(dcityname, acityname)
-                            fromtodate = '{}->{}{}'.format(dcityname,acityname,date)
                             routeStatusnum = routeStatus['code']
                             if routeStatusnum == '103':
                                 rdb.sadd(self.rdb_unreq_name, json.dumps('{}'.format(fromto)))
                                 stlogger.info(
-                                    '请求{}数据返回状态码{}表明无航班加入reids数据库'.format(fromtodate,routeStatusnum))
+                                    '请求{}数据返回状态码{}表明无航班加入reids数据库'.format(tmpmongodata, routeStatusnum))
                             elif routeStatusnum == '101':
-                                stlogger.info('{}全票售完'.format(fromtodate))
+                                stlogger.info('{}全票售完'.format(tmpmongodata))
                             else:
-                                es = '发现新的状态码{} {}'.format(routeStatusnum, fromtodate)
+                                es = '发现新的状态码{} {}'.format(routeStatusnum, tmpmongodata)
                                 wdblogger.error(es)
                                 rdb.incr(self.error_count)
                                 mylogging.sender(es)
@@ -394,7 +353,7 @@ class CtripPTSpider:
             endnume = json.loads(rdb.get(self.error_count))
             countr = endnumr - startnumr
             counte = endnume - startnume
-            s = '在{}分钟内请求次数{}\n错误次数{}'.format(interval / 60, countr,counte)
+            s = '在{}分钟内请求次数{}\n错误次数{}'.format(interval / 60, countr, counte)
             idblogger.info(s)
             try:
                 coll.insert({'time': time.time(), 'count': s})
@@ -404,5 +363,4 @@ class CtripPTSpider:
                 rdb.incr(self.error_count)
                 db = self.con_mongo()
                 coll = db['req_count']
-
 
