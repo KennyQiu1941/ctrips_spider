@@ -68,31 +68,16 @@ class CtripPTSpider:
 
     # 创建mongo连接并验证连接是否有效连接错误重写读取数据重写创建
     def con_mongo(self):
-        while True:
-            now = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-            mhost, mongoport, rhost, redisport = self.load_conf()
-            con = pymongo.MongoClient(mhost, mongoport, serverSelectionTimeoutMS=3)
-            db = con['ctripflights']
-            try:
-                testdatabase = con['con——test']
-                coll = testdatabase['test']
-                coll.insert({'test': '{}mongodb连接测试'.format(now)})
-            except Exception as e:
-                time.sleep(15)
-            else:
-                return db
+        mhost, mongoport, rhost, redisport = self.load_conf()
+        con = pymongo.MongoClient(mhost, mongoport, serverSelectionTimeoutMS=3)
+        db = con['ctripflights']
+        return db
 
     # 创建redis连接并验证
     def con_redis(self):
-        while True:
-            mhost, mongoport, rhost, redisport = self.load_conf()
-            rdb = redis.Redis(rhost, redisport, db=0, socket_timeout=3)
-            try:
-                rdb.set('rdbConTest', 'test')
-            except Exception as e:
-                time.sleep(15)
-            else:
-                return rdb
+        mhost, mongoport, rhost, redisport = self.load_conf()
+        rdb = redis.Redis(rhost, redisport, db=0, socket_timeout=3)
+        return rdb
 
     # 获取所有的城市code数据（作用是获取航班信息的post参数）这函数只需单独运行24小时获取一次就可以
     def get_city_code(self):
