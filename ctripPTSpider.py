@@ -324,8 +324,8 @@ class CtripPTSpider:
                                 wdblogger.error(es)
                                 rdb.incr(self.error_count)
                                 mylogging.sender(es)
-                else:
-                    time.sleep(1)
+            else:
+                time.sleep(1)
 
     # 用于统计每分钟请求的次数
     def show_req_count(self, rdb, db, interval=60):
