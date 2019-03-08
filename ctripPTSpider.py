@@ -133,7 +133,7 @@ class CtripPTSpider:
             time.sleep(15)
 
     # 提取post参数并写入redis数据库供多线程
-    def req_parameter(self, date, cityscode, rdb):
+    def write_parameter(self, cityscode, rdb):
         allcityscode = self.preprocessing(cityscode)
         for each_dcity in allcityscode:
             dcityname = each_dcity[0]
@@ -148,13 +148,10 @@ class CtripPTSpider:
                     acityzimu = tmp[3]
                     acitynum = tmp[2]
                     if not rdb.sismember(self.rdb_unreq_name, json.dumps('{}->{}'.format(dcityname, acityname))):
-                        rdb.lpush(self.rdb_post_data_name, json.dumps(
-                            [dcityzimu, acityzimu, dcityname, acityname, date, dcitynum, acitynum]))
+                        for date in self.gendate():
+                            rdb.lpush(self.rdb_post_data_name, json.dumps(
+                                [dcityzimu, acityzimu, dcityname, acityname, date, dcitynum, acitynum]))
 
-    def write_parameter(self, cityscode, rdb):
-        for date in self.gendate():
-            print(date)
-            threading.Thread(target=self.req_parameter, args=(date, cityscode, rdb)).start()
 
     # 由于请求航班有的航班是不同航在req_parameter和write_database这两个函数内实现将不通航的航班放入redis数据库名为
     # self.rdb_unreq_name = 'flightnotairline'的集合内做到不在对这个航班发出请求
@@ -348,4 +345,5 @@ class CtripPTSpider:
                 rdb.incr(self.error_count)
                 db = self.con_mongo()
                 coll = db['req_count']
+
 
