@@ -59,7 +59,7 @@ class CtripPTSpider:
     # 读取数据库配置参数
     def load_conf(self):
         conf = configparser.ConfigParser()
-        conf.read('logsetting.ini')
+        conf.read('/code/logsetting.ini')
         mhost = conf.get('CtripPTSpider', 'mongohost')
         rhost = conf.get('CtripPTSpider', 'redishost')
         mongoport = conf.getint('CtripPTSpider', 'mongoport')
@@ -305,9 +305,7 @@ class CtripPTSpider:
                                     coll.insert(mongodata)
                                     stlogger.info('加入全新{}数据'.format(tmpmongodata))
                             else:
-                                stlogger.info('{}状态码返回显示有航班但是无数据加入redis下次不请求'.format(tmpmongodata))
-                                rdb.sadd(self.rdb_unreq_name, json.dumps('{}'.format(fromto)))
-                                continue
+                                stlogger.info('{}当天无数据'.format(tmpmongodata))
                         else:
                             routeStatusnum = routeStatus['code']
                             if routeStatusnum == '103':
